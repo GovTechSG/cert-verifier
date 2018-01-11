@@ -5,6 +5,9 @@ Connectors supporting Bitcoin transaction lookups. This is used in the Blockchai
 import logging
 
 import requests
+
+from web3 import Web3, HTTPProvider, IPCProvider
+
 from cert_core import BlockchainType, BlockcertVersion, Chain
 from cert_core import PUBKEY_PREFIX
 
@@ -24,11 +27,12 @@ def createTransactionLookupConnector(chain=Chain.bitcoin_mainnet, options=None):
     if chain == Chain.mockchain or chain == Chain.bitcoin_regtest:
         return MockConnector(chain)
     elif chain.blockchain_type == BlockchainType.ethereum:
-        if options and 'etherscan_api_token' in options:
-            etherscan_api_token = options['etherscan_api_token']
-        else:
-            etherscan_api_token = None
-        return EtherscanConnector(chain, etherscan_api_token)
+        # if options and 'etherscan_api_token' in options:
+        #     etherscan_api_token = options['etherscan_api_token']
+        # else:
+        #     etherscan_api_token = None
+        # return EtherscanConnector(chain, etherscan_api_token)
+        return Web3HttpProvider()
     return FallbackConnector(chain)
 
 
@@ -217,6 +221,47 @@ class EtherscanConnector(TransactionLookupConnector):
             raise InvalidTransactionError('error looking up block timestamp=%s' % block_no)
         date_time = r.json()['result']['timeStamp']
         return TransactionData(signing_key, script, date_time_utc=int(date_time), revoked_addresses=None)
+
+
+class Web3Provider(object):
+    def __init__(self, provider):
+        self.provider = Web3(provider)
+
+    def lookup_tx(self, txid):
+        transaction = self.fetch_tx(txid)
+        return self.parse_tx(transaction)
+
+    def fetch_tx(self, txid):
+        return self.provider.eth.getTransaction(txid)
+
+    def parse_tx(self, transaction):
+        signing_key = transaction['from']
+        script = transaction['input']
+        block_no = transaction['blockNumber']
+        if not script:
+            logging.error(
+                'transaction response is missing input: %s', transaction)
+            raise InvalidTransactionError(
+                'transaction response is missing input')
+        if not block_no:
+            logging.error(
+                'transaction is not yet confirmed: %s', transaction)
+            raise InvalidTransactionError('transaction is not yet confirmed')
+
+        block = self.provider.eth.getBlock(block_no)
+        date_time = block['timestamp']
+        return TransactionData(signing_key, script, date_time_utc=int(date_time), revoked_addresses=None)
+
+
+class Web3HttpProvider(Web3Provider):
+    def __init__(self, uri='http://localhost:8545'):
+        super(Web3HttpProvider, self).__init__(HTTPProvider(uri))
+
+
+class Web3IpcProvider(Web3Provider):
+    def __init__(self):
+        super(Web3HttpProvider, self).__init__(IPCProvider())
+
 
 
 def get_field_or_default(data, field_name):
